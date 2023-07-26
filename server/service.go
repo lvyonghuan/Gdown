@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"time"
 
+	"Gdown/server/user"
+
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -30,7 +32,11 @@ var upgrade = websocket.Upgrader{
 // InitRouter 初始化路由
 func InitRouter() {
 	r := gin.Default()
-	r.GET("login")                   //登录
+	u := r.Group("/user")
+	{
+		u.GET("/login", user.Login)
+		u.POST("/register", user.Register)
+	}
 	r.GET("/", connect)              //客户端与服务器建立连接。
 	r.POST("/list", getFileList)     //客户端向服务器发送已经下载的文件的列表
 	r.GET("/download", sendMateDate) //客户端下载文件，服务器返回此文件的元数据和拥有此文件的客户端的IP地址
@@ -65,6 +71,28 @@ func getFileList(c *gin.Context) {
 // connect 客户端与服务器建立websocket长连接
 // 进行客户端鉴权
 func connect(c *gin.Context) {
+	//验证token
+	token := c.GetHeader("Authorization")
+	if token == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"message": "未授权",
+		})
+		return
+	}
+	claims, err := user.ParseToken(token)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"message": "未授权",
+		})
+		return
+	}
+	if !claims {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"message": "未授权",
+		})
+		return
+	}
+
 	var cli client
 	cli.IPAdr = c.ClientIP()
 	clientList[cli.IPAdr] = true
