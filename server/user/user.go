@@ -1,6 +1,7 @@
 package user
 
 import (
+	"fmt"
 	"log"
 	"time"
 
@@ -151,7 +152,13 @@ func ParseToken(tokenString string) (bool, error) {
 	if !token.Valid {
 		return false, nil
 	}
-	if time.Now().Unix() > token.Claims.(jwt.MapClaims)["exp"].(int64) {
+	expFloat64, ok := token.Claims.(jwt.MapClaims)["exp"].(float64)
+	if !ok {
+		return false, fmt.Errorf("无法解析 token 的 exp 字段")
+	}
+	exp := int64(expFloat64)
+
+	if time.Now().Unix() > exp {
 		return false, nil
 	}
 	return true, nil

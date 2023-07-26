@@ -29,7 +29,7 @@ func register() {
 	}
 
 	//发送注册信息
-	req, err := http.NewRequest("POST", cfg.ServiceAdr+"/user/register", bytes.NewBuffer(buf))
+	req, err := http.NewRequest("POST", "http://"+cfg.ServiceAdr+"/user/register", bytes.NewBuffer(buf))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Length", strconv.Itoa(len(buf)))
 	req.Header.Set("User-Agent", "GDown")
@@ -77,7 +77,7 @@ func login() {
 	}
 
 	//发送登录信息
-	req, err := http.NewRequest("GET", cfg.ServiceAdr+"/user/login", bytes.NewBuffer(buf))
+	req, err := http.NewRequest("GET", "http://"+cfg.ServiceAdr+"/user/login", bytes.NewBuffer(buf))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Length", strconv.Itoa(len(buf)))
 	req.Header.Set("User-Agent", "GDown")

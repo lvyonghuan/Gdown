@@ -109,38 +109,54 @@ func connect(c *gin.Context) {
 
 // 心跳和断线检测
 func heartBeat(conn *websocket.Conn) {
+	var ticker = time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	defer conn.Close()
+	var stopChan = make(chan bool) //用于停止进程
+	var readChan = make(chan bool) //阻塞心跳进程，直到读取消息
+
+	//发送心跳
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		const pongWait = 6 * time.Second
-		defer ticker.Stop()
-		defer conn.Close()
 		for {
 			select {
 			case <-ticker.C:
-				err := conn.WriteMessage(websocket.PingMessage, nil)
+				err := conn.WriteMessage(websocket.TextMessage, []byte("ping!"))
 				if err != nil {
 					if err.Error() == "websocket: close sent" {
 						return
 					}
-					log.Println("发送心跳包失败：", err)
+					log.Println("发送心跳失败：", err)
+					stopChan <- true
 					return
 				}
-				conn.SetPongHandler(func(string) error {
-					err = conn.SetReadDeadline(time.Now().Add(pongWait))
-					if err != nil {
-						log.Println("客户端断线：", err)
-						return err
-					}
-					return nil
-				})
+				<-readChan
+				err = conn.SetWriteDeadline(time.Now().Add(65 * time.Second))
+				if err != nil {
+					log.Println("设置写入截止时间失败：", err)
+					stopChan <- true
+					return
+				}
 			}
 		}
 	}()
+
+	//检测客户端断线
+	go func() {
+		for {
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				log.Println("客户端断线：", err)
+				stopChan <- true
+				return
+			}
+			readChan <- true
+		}
+	}()
+
+	//停止进程
 	for {
-		_, _, err := conn.ReadMessage()
-		if err != nil {
-			log.Println("客户端断线：", err)
-			conn.Close()
+		select {
+		case <-stopChan:
 			return
 		}
 	}
