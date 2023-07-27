@@ -113,12 +113,9 @@ func chunkFile(file *FileInfo, pieceSize int) error {
 
 		p.PieceIndex = i
 		p.PieceStart = i * pieceSize //记录分片处在文件的起始位置
-		if i != 0 {
-			p.PieceStart += 1
-		}
 
 		if i == file.FilePiecesNum-1 {
-			p.PieceSize = file.FileSize - i*pieceSize - 1
+			p.PieceSize = file.FileSize - i*pieceSize
 		} else {
 			p.PieceSize = pieceSize
 		}
