@@ -88,7 +88,7 @@ func sendFilePiece(c *gin.Context) {
 		return
 	}
 	//检查start是否在map当中
-	_, ok = fileInformation.filePiecesByStart[start]
+	p, ok := fileInformation.filePiecesByStart[start]
 	if !ok {
 		c.JSON(400, gin.H{
 			"message": "range格式错误",
@@ -96,7 +96,7 @@ func sendFilePiece(c *gin.Context) {
 		return
 	}
 	//获取文件的片段
-	filePiece := getFilePiece(fileName, start)
+	filePiece := getFilePiece(fileName, start, p.PieceSize)
 	//发送文件的片段
 	c.Data(200, "application/octet-stream", filePiece)
 }
@@ -135,13 +135,13 @@ func getPieceStart(fileRange string) (int, bool) {
 }
 
 // 获取指定文件的指定片段
-func getFilePiece(fileName string, pieceStart int) []byte {
+func getFilePiece(fileName string, pieceStart, pSize int) []byte {
 	file, err := os.Open("./file/" + fileName)
 	if err != nil {
 		return nil
 	}
 	defer file.Close()
-	filePiece := make([]byte, pieceSize)
+	filePiece := make([]byte, pSize)
 	_, err = file.ReadAt(filePiece, int64(pieceStart))
 	if err != nil {
 		return nil

@@ -213,7 +213,6 @@ func (d *downEngine) downPiece(index int, client string) ([]byte, bool) {
 	req.Header.Set("Content-Length", strconv.Itoa(len(encodeData)))
 	req.Header.Set("User-Agent", "GDown")
 	req.Header.Set("Range", "bytes="+startStr+"-"+endStr)
-	log.Println(req.Header.Get("Range"))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

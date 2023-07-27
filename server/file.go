@@ -110,7 +110,7 @@ func chunkFile(file *FileInfo, pieceSize int) error {
 	defer f.Close()
 	for i := 0; i < file.FilePiecesNum; i++ {
 		var p Piece
-		
+
 		p.PieceIndex = i
 		p.PieceStart = i * pieceSize //记录分片处在文件的起始位置
 		if i != 0 {
@@ -124,7 +124,7 @@ func chunkFile(file *FileInfo, pieceSize int) error {
 		}
 
 		pieceData := make([]byte, p.PieceSize)
-		_, err := f.Read(pieceData)
+		_, err := f.ReadAt(pieceData, int64(p.PieceStart))
 		if err != nil {
 			log.Println(file.FileName, "处理错误，文件分片失败：", err)
 			return err
