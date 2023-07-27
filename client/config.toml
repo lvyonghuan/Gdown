@@ -1,3 +1,6 @@
 service_adr="127.0.0.1:8080"
 username="test"
 Password="test"
+client_port=11452
+down_rate=0
+up_rate=0

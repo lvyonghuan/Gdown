@@ -1,24 +1,31 @@
 package server
 
 import (
-	"github.com/gin-gonic/gin"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/gin-gonic/gin"
 )
 
 // 向客户端发送文件元数据
-func sendMateDate(c *gin.Context) {
-	//检查客户端是否处在连接状态
-	if isConnect, ok := clientList[c.ClientIP()]; !ok || !isConnect {
-		c.JSON(403, gin.H{
-			"message": "客户端未建立连接",
+func sendMetaDate(c *gin.Context) {
+	//获取客户端请求的文件名
+	var request struct {
+		FileName string `json:"file_name"`
+	}
+	err := c.BindJSON(&request)
+	if err != nil {
+		c.JSON(400, gin.H{
+			"message": "请求格式错误",
 		})
 		return
 	}
-	fileName := c.PostForm("file_name") //获取客户端请求的文件名
+	fileName := request.FileName
+
 	//检查文件名是否存在在文件列表中
-	if _, ok := fileLists[fileName]; !ok {
+	_, ok := fileLists[fileName]
+	if !ok {
 		c.JSON(404, gin.H{
 			"message": "文件不存在",
 		})
@@ -33,7 +40,8 @@ func sendMateDate(c *gin.Context) {
 		return
 	}
 	//将此客户端的ip地址加入到文件的ip列表当中去
-	fileLists[fileName].ipAdr.Store(c.ClientIP(), true)
+	ip := c.ClientIP() + ":" + c.GetHeader("X-User-Port")
+	fileLists[fileName].ipAdr.Store(ip, true)
 	//获取拥有此文件的客户端的IP地址
 	var ipAdr []string
 	fileLists[fileName].ipAdr.Range(func(key, value interface{}) bool {
@@ -49,8 +57,20 @@ func sendMateDate(c *gin.Context) {
 
 // 向客户端发送请求的文件数据片段
 func sendFilePiece(c *gin.Context) {
-	fileName := c.PostForm("file_name") //获取客户端请求的文件名
-	fileRange := c.GetHeader("Range")   //获取客户端请求的文件片段
+	//获取客户端请求的文件名
+	var request struct {
+		FileName string `json:"file_name"`
+	}
+	err := c.BindJSON(&request)
+	if err != nil {
+		c.JSON(400, gin.H{
+			"message": "请求格式错误",
+		})
+		return
+	}
+	fileName := request.FileName
+
+	fileRange := c.GetHeader("Range") //获取客户端请求的文件片段
 	//检查文件名是否存在在文件列表中
 	fileInformation, ok := fileLists[fileName]
 	if !ok {

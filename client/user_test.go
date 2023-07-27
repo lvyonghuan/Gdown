@@ -4,13 +4,19 @@ import (
 	"testing"
 )
 
-func TestRegister(t *testing.T) {
-	readConfig()
-	register()
-}
+//func TestRegister(t *testing.T) {
+//	readConfig()
+//	register()
+//}
+//
+//func TestLogin(t *testing.T) {
+//	readConfig()
+//	login()
+//	connect()
+//}
 
-func TestLogin(t *testing.T) {
+func TestDown(t *testing.T) {
 	readConfig()
 	login()
-	connect()
+	fileHandler("Automation.mp3")
 }

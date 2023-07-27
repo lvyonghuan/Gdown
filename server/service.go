@@ -3,6 +3,7 @@ package server
 import (
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"Gdown/server/user"
@@ -37,9 +38,10 @@ func InitRouter() {
 		u.GET("/login", user.Login)
 		u.POST("/register", user.Register)
 	}
-	r.GET("/", connect)              //客户端与服务器建立连接。
-	r.POST("/list", getFileList)     //客户端向服务器发送已经下载的文件的列表
-	r.GET("/download", sendMateDate) //客户端下载文件，服务器返回此文件的元数据和拥有此文件的客户端的IP地址
+	r.GET("/", connect)           //客户端与服务器建立连接。
+	r.POST("/list", getFileList)  //客户端向服务器发送已经下载的文件的列表
+	r.GET("/meta", sendMetaDate)  //客户端下载文件，服务器返回此文件的元数据和拥有此文件的客户端的IP地址
+	r.GET("/down", sendFilePiece) //下载具体的分片
 	r.Run()
 }
 
@@ -63,7 +65,7 @@ func getFileList(c *gin.Context) {
 		if _, ok := fileLists[fileName]; !ok { //健壮性检查
 			continue
 		}
-		fileLists[fileName].ipAdr.Store(c.ClientIP(), true) //将客户端ip追加到文件的列表当中去
+		fileLists[fileName].ipAdr.Store(c.ClientIP()+getPort(c.Request), true) //将客户端ip追加到文件的列表当中去
 	}
 }
 
@@ -94,7 +96,7 @@ func connect(c *gin.Context) {
 	}
 
 	var cli client
-	cli.IPAdr = c.ClientIP()
+	cli.IPAdr = c.ClientIP() + ":" + c.GetHeader("X-User-Port")
 	clientList[cli.IPAdr] = true
 	conn, err := upgrade.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -113,7 +115,6 @@ func heartBeat(conn *websocket.Conn) {
 	defer ticker.Stop()
 	defer conn.Close()
 	var stopChan = make(chan bool) //用于停止进程
-	var readChan = make(chan bool) //阻塞心跳进程，直到读取消息
 
 	//发送心跳
 	go func() {
@@ -129,13 +130,6 @@ func heartBeat(conn *websocket.Conn) {
 					stopChan <- true
 					return
 				}
-				<-readChan
-				err = conn.SetWriteDeadline(time.Now().Add(65 * time.Second))
-				if err != nil {
-					log.Println("设置写入截止时间失败：", err)
-					stopChan <- true
-					return
-				}
 			}
 		}
 	}()
@@ -143,13 +137,19 @@ func heartBeat(conn *websocket.Conn) {
 	//检测客户端断线
 	go func() {
 		for {
-			_, _, err := conn.ReadMessage()
+			err := conn.SetReadDeadline(time.Now().Add(125 * time.Second)) //重置读取截止时间
+			if err != nil {
+				log.Println("设置读取截止时间失败：", err)
+				stopChan <- true
+				return
+			}
+			_, msg, err := conn.ReadMessage()
 			if err != nil {
 				log.Println("客户端断线：", err)
 				stopChan <- true
 				return
 			}
-			readChan <- true
+			log.Println(msg)
 		}
 	}()
 
@@ -168,4 +168,11 @@ func deleteFileIP(cli *client) {
 		file := cli.DownFileList[i]
 		file.ipAdr.Delete(cli.IPAdr)
 	}
+}
+
+// 获取客户端端口号
+func getPort(r *http.Request) string {
+	ip := strings.Split(r.RemoteAddr, ":")
+	log.Println(ip)
+	return ":" + ip[1] //返回端口号
 }

@@ -1,8 +1,10 @@
 package client
 
 import (
-	"github.com/spf13/viper"
 	"log"
+
+	"github.com/fsnotify/fsnotify"
+	"github.com/spf13/viper"
 )
 
 //客户端配置文件管理。
@@ -13,6 +15,9 @@ type config struct {
 	ServiceAdr string `mapstructure:"service_adr"` //服务器地址
 	UserName   string `mapstructure:"username"`    //用户名
 	Password   string `mapstructure:"password"`    //密码
+	ClientPort int    `mapstructure:"client_port"` //指定客户端端口号
+	DownRate   int    `mapstructure:"down_rate"`   //下载速度。为0时不限速，下同
+	UpRate     int    `mapstructure:"up_rate"`     //上传速度
 	token      string
 }
 
@@ -31,4 +36,16 @@ func readConfig() {
 	if err != nil {
 		log.Fatalf("解析配置文件错误:%v", err)
 	}
+}
+
+// 持续监视配置文件，实现热修改（在客户端登陆之后启用）
+func hotReset() {
+	viper.WatchConfig()
+	viper.OnConfigChange(func(in fsnotify.Event) {
+		err := viper.Unmarshal(&cfg)
+		if err != nil {
+			log.Println("解析配置文件错误:", err)
+		}
+		limit() //重写限速令牌桶
+	})
 }

@@ -107,4 +107,5 @@ func login() {
 
 	//保存token
 	cfg.token = response.Token
+	connect() //自动进行连接
 }
