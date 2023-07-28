@@ -1,6 +1,7 @@
 package client
 
 import (
+	"sync"
 	"testing"
 )
 
@@ -18,5 +19,10 @@ import (
 func TestDown(t *testing.T) {
 	readConfig()
 	login()
-	fileHandler("Automation.mp3")
+	var wa sync.WaitGroup
+	wa.Add(1)
+	go initRouters()
+	go downControl()
+	downChan <- "Automation.mp3"
+	wa.Wait()
 }

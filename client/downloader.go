@@ -21,6 +21,8 @@ import (
 //5.每隔一段时间向文件服务器询问最新的客户端列表。
 //6.对应3：如果一个客户端跑满了（达到了上传速率限制），则也询问下一个客户端or服务器。
 
+var downChan = make(chan string, 10) //下载任务队列（限制同时下载的文件数）
+
 // 下载引擎
 type downEngine struct {
 	fileName string   //下载的文件名
@@ -45,14 +47,24 @@ type piece struct {
 }
 
 // 分片数据，保证分片的排序一致性
-type fileDate struct {
+type fileData struct {
 	index int    //文件的实际分片数
 	data  []byte //文件的数据
 }
 
 // 下载总控器
 func downControl() {
+	//初始化下载队列
+	isDowningQueue = make(map[string]*isDowning)
+	hasDownedQueue = make(map[string]struct{})
 
+	//启动下载进程
+	for {
+		select {
+		case fileName := <-downChan:
+			go fileHandler(fileName)
+		}
+	}
 }
 
 // 单个文件的下载控制调度器
@@ -62,11 +74,11 @@ func fileHandler(fileName string) {
 	pieceNum := engine.fileInfo.FilePiecesNum           //获取文件的分片数
 	engine.ipAdr = append(engine.ipAdr, cfg.ServiceAdr) //将服务器也作为一个下载节点
 
-	var fileQueue []fileDate //文件队列，用于记录下载成功的分片，按照顺序进行排列
-	var failQueue []int      //失败队列，用于记录下载失败的分片的索引
+	var fileQueue []fileData                                                  //文件队列，用于记录下载成功的分片，按照顺序进行排列
+	var failQueue []int                                                       //失败队列，用于记录下载失败的分片的索引
+	isDowningQueue[fileName] = &isDowning{filePiece: make(map[int]*fileData)} //将文件加入到正在下载的队列中
 
 	successNum := 0 //下载成功的分片数
-	log.Println(engine.fileInfo.FileSize)
 
 	for i, j := 0, 0; i < pieceNum; i++ { //轮询多线程下载
 		var client string
@@ -80,13 +92,29 @@ func fileHandler(fileName string) {
 				break
 			}
 		}
+
+		//下载分片
 		data, isSuccess := engine.downPiece(i, client)
 		if !isSuccess {
 			failQueue = append(failQueue, i)
 			continue
 		}
-		fileQueue = append(fileQueue, fileDate{i, data})
+
+		//将分片加入到文件队列中
+		fileQueue = append(fileQueue, fileData{i, data})
+
+		//打印下载进度
 		successNum++
+		percentage := float64(successNum) / float64(pieceNum) * 100
+		log.Printf("下载进度：%.2f%%", percentage)
+
+		//将分片加入到正在下载队列中。使用goroutine，避免阻塞主线程。
+		k := i
+		go func() {
+			isDowningQueue[fileName].mu.Lock()
+			isDowningQueue[fileName].filePiece[engine.fileInfo.FilePieces[k].PieceStart] = &fileData{k, data}
+			isDowningQueue[fileName].mu.Unlock()
+		}()
 	}
 
 	//重新下载失败的队列
@@ -94,14 +122,27 @@ func fileHandler(fileName string) {
 		data, isSuccess := engine.downPiece(i, cfg.ServiceAdr) //直接从服务器获取失败的数据
 		if !isSuccess {
 			log.Println("第" + strconv.Itoa(i) + "片下载失败,文件损坏，请重新下载") //再失败就不重试了
-			//return
+			//TODO:其实也可以再重试几轮
 		}
-		fileQueue = append(fileQueue, fileDate{i, data})
+		fileQueue = append(fileQueue, fileData{i, data})
 		successNum++
+		percentage := float64(successNum) / float64(pieceNum) * 100
+		log.Printf(fileName+"下载进度：%.2f%%", percentage)
+
+		k := i
+		go func() {
+			isDowningQueue[fileName].mu.Lock()
+			isDowningQueue[fileName].filePiece[engine.fileInfo.FilePieces[k].PieceStart] = &fileData{k, data}
+			isDowningQueue[fileName].mu.Unlock()
+		}()
 	}
 
 	//将文件队列按照顺序写入文件
 	writeFile(fileQueue, fileName)
+	//将文件从正在下载队列中移除
+	isDowningQueue[fileName].mu.Lock()
+	delete(isDowningQueue, fileName)
+	hasDownedQueue[fileName] = struct{}{} //将文件加入到已下载队列中
 }
 
 // 新建下载任务
@@ -187,6 +228,8 @@ func (d *downEngine) unmarshalGod() {
 
 // 下载分片数据
 func (d *downEngine) downPiece(index int, client string) ([]byte, bool) {
+	downLimitGet()   //下载限速，获取令牌
+	defer downDown() //放回令牌
 	u := "http://" + client + "/down"
 	var data struct {
 		FileName string `json:"file_name"`
@@ -238,7 +281,7 @@ func (d *downEngine) downPiece(index int, client string) ([]byte, bool) {
 }
 
 // 写入文件
-func writeFile(filesData []fileDate, fileName string) {
+func writeFile(filesData []fileData, fileName string) {
 	//将队列按照顺序进行排序，保证一致性
 	sort.Slice(filesData, func(i, j int) bool {
 		return filesData[i].index < filesData[j].index

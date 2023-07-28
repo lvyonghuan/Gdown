@@ -143,13 +143,12 @@ func heartBeat(conn *websocket.Conn) {
 				stopChan <- true
 				return
 			}
-			_, msg, err := conn.ReadMessage()
+			_, _, err = conn.ReadMessage()
 			if err != nil {
 				log.Println("客户端断线：", err)
 				stopChan <- true
 				return
 			}
-			log.Println(msg)
 		}
 	}()
 

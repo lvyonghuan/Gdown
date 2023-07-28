@@ -1,12 +1,21 @@
 package client
 
+import "sync"
+
 //限速器。采用令牌桶算法，读取配置文件，实现下载速度和上传速度的限制。
 //简单来说，配置文件配置速度/每块分片的大小，获得可以同时进行传输的分片数量，从而达到速率限制的效果
 
+// 上传速度限制器
+type upL struct {
+	upLimit int        //上传速度最大限制
+	upCount int        //已经在上传的分片数量
+	mu      sync.Mutex //并发安全
+}
+
 var (
-	downLimit chan struct{} //下载速度限制
-	upLimit   chan struct{} //上传速度限制
-)
+	downLimit chan struct{}
+	upLimit   upL
+) //下载速度限制
 
 const blockSize = 1024 * 1024 //每个分片的大小。服务器制造固定大小的分片，同步。
 
@@ -24,9 +33,9 @@ func limit() {
 
 	//构造上传限速令牌桶
 	if upRateLimit != 0 {
-		upLimit = make(chan struct{}, upRateLimit/blockSize)
+		upLimit.upLimit = upRateLimit / blockSize
 	} else {
-		upLimit = nil
+		upLimit.upLimit = 0
 	}
 }
 
@@ -37,10 +46,19 @@ func downLimitGet() {
 	}
 }
 
-// 上传限速器。同理。
-func upLimitGet() {
-	if upLimit != nil {
-		upLimit <- struct{}{}
+// 上传限速器。返回布尔，表示是否达到。
+func upLimitGet() bool {
+	if upLimit.upLimit == 0 { //如果没有限速
+		return true
+	} else {
+		upLimit.mu.Lock()
+		defer upLimit.mu.Unlock()
+		if upLimit.upCount < upLimit.upLimit { //如果没有达到限速
+			upLimit.upCount++
+			return true
+		} else { //如果达到限速
+			return false
+		}
 	}
 }
 
@@ -53,7 +71,9 @@ func downDown() { //这名字多少有点滑稽了，下载结束。
 
 // 同理
 func upDown() {
-	if upLimit != nil {
-		<-upLimit
+	if upLimit.upLimit != 0 {
+		upLimit.mu.Lock()
+		defer upLimit.mu.Unlock()
+		upLimit.upCount--
 	}
 }
