@@ -28,7 +28,6 @@ type downEngine struct {
 	fileName string   //下载的文件名
 	ipAdr    []string //拥有该文件的客户端ip列表
 	fileInfo fileInfo
-	fileDate []byte
 }
 
 // 文件元数据
@@ -52,7 +51,13 @@ type fileData struct {
 	data  []byte //文件的数据
 }
 
-// 下载总控器
+// 临时文件信息
+type tempFileInfo struct {
+	index int
+	name  string
+}
+
+// DownControl 下载总控器
 func DownControl() {
 	//初始化下载队列
 	isDowningQueue = make(map[string]*isDowning)
@@ -73,9 +78,9 @@ func fileHandler(fileName string) {
 	pieceNum := engine.fileInfo.FilePiecesNum           //获取文件的分片数
 	engine.ipAdr = append(engine.ipAdr, cfg.ServiceAdr) //将服务器也作为一个下载节点
 
-	var fileQueue []fileData                                                  //文件队列，用于记录下载成功的分片，按照顺序进行排列
-	var failQueue []int                                                       //失败队列，用于记录下载失败的分片的索引
-	isDowningQueue[fileName] = &isDowning{filePiece: make(map[int]*fileData)} //将文件加入到正在下载的队列中
+	var fileQueue []tempFileInfo                                           //文件队列，用于记录下载成功的分片，按照顺序进行排列
+	var failQueue []int                                                    //失败队列，用于记录下载失败的分片的索引
+	isDowningQueue[fileName] = &isDowning{filePiece: make(map[int]string)} //将文件加入到正在下载的队列中
 
 	successNum := 0 //下载成功的分片数
 
@@ -99,8 +104,15 @@ func fileHandler(fileName string) {
 			continue
 		}
 
+		//将分片写成临时文件
+		if !writeTempFile(data, i, fileName) {
+			log.Println("第" + strconv.Itoa(i) + "片写入临时文件失败")
+			failQueue = append(failQueue, i)
+			continue
+		}
+
 		//将分片加入到文件队列中
-		fileQueue = append(fileQueue, fileData{i, data})
+		fileQueue = append(fileQueue, tempFileInfo{i, "./temp/" + fileName + strconv.Itoa(i) + ".tmp"})
 
 		//打印下载进度
 		successNum++
@@ -111,7 +123,7 @@ func fileHandler(fileName string) {
 		k := i
 		go func() {
 			isDowningQueue[fileName].mu.Lock()
-			isDowningQueue[fileName].filePiece[engine.fileInfo.FilePieces[k].PieceStart] = &fileData{k, data}
+			isDowningQueue[fileName].filePiece[engine.fileInfo.FilePieces[k].PieceStart] = fileName + strconv.Itoa(k)
 			isDowningQueue[fileName].mu.Unlock()
 		}()
 	}
@@ -123,7 +135,15 @@ func fileHandler(fileName string) {
 			log.Println("第" + strconv.Itoa(i) + "片下载失败,文件损坏，请重新下载") //再失败就不重试了
 			//TODO:其实也可以再重试几轮
 		}
-		fileQueue = append(fileQueue, fileData{i, data})
+
+		//将分片写成临时文件
+		if !writeTempFile(data, i, fileName) {
+			log.Println("第" + strconv.Itoa(i) + "片写入临时文件失败")
+			failQueue = append(failQueue, i)
+			continue
+		}
+
+		fileQueue = append(fileQueue, tempFileInfo{i, "./temp/" + fileName + strconv.Itoa(i) + ".tmp"})
 		successNum++
 		percentage := float64(successNum) / float64(pieceNum) * 100
 		log.Printf(fileName+"下载进度：%.2f%%", percentage)
@@ -131,7 +151,7 @@ func fileHandler(fileName string) {
 		k := i
 		go func() {
 			isDowningQueue[fileName].mu.Lock()
-			isDowningQueue[fileName].filePiece[engine.fileInfo.FilePieces[k].PieceStart] = &fileData{k, data}
+			isDowningQueue[fileName].filePiece[engine.fileInfo.FilePieces[k].PieceStart] = fileName + strconv.Itoa(k)
 			isDowningQueue[fileName].mu.Unlock()
 		}()
 	}
@@ -281,26 +301,52 @@ func (d *downEngine) downPiece(index int, client string) ([]byte, bool) {
 }
 
 // 写入文件
-func writeFile(filesData []fileData, fileName string) {
+func writeFile(filesData []tempFileInfo, fileName string) {
 	//将队列按照顺序进行排序，保证一致性
 	sort.Slice(filesData, func(i, j int) bool {
 		return filesData[i].index < filesData[j].index
 	})
 
-	//写文件
-	file, err := os.Create("./down/" + fileName)
+	//合并临时文件
+	file, err := os.OpenFile("./down/"+fileName, os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		log.Println("创建文件失败:", err)
 		return
 	}
 	defer file.Close()
-	for _, data := range filesData {
-		_, err = file.Write(data.data)
+	for _, fileData := range filesData {
+		data, err := os.ReadFile(fileData.name)
+		if err != nil {
+			log.Println("读取临时文件失败:", err)
+			return
+		}
+		_, err = file.Write(data)
 		if err != nil {
 			log.Println("写入文件失败:", err)
 			return
 		}
+		err = os.Remove(fileData.name)
+		if err != nil {
+			log.Println("删除临时文件失败:", err)
+			continue
+		}
 	}
+	log.Println(fileName + "下载完成")
+}
+
+// 写临时文件
+func writeTempFile(data []byte, index int, fileName string) bool {
+	tempFile, err := os.Create("./temp/" + fileName + strconv.Itoa(index) + ".tmp")
+	if err != nil {
+		return false
+	}
+
+	defer tempFile.Close()
+	_, err = tempFile.Write(data)
+	if err != nil {
+		return false
+	}
+	return true
 }
 
 // 哈希值校验

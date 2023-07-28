@@ -17,7 +17,7 @@ import (
 
 type isDowning struct {
 	mu        sync.Mutex
-	filePiece map[int]*fileData //正在下载的文件队列。key为分片的起始位置，value为分片的数据
+	filePiece map[int]string //key为起始位置，value为第几片的索引
 }
 
 var (
@@ -102,11 +102,18 @@ func getIsDowningFilePiece(start int, fileData *isDowning) ([]byte, bool) {
 	fileData.mu.Lock()
 	defer fileData.mu.Unlock()
 	//检查start是否在map当中
-	p, ok := fileData.filePiece[start]
+	fileName, ok := fileData.filePiece[start]
 	if !ok {
 		return nil, false
 	}
-	return p.data, true
+
+	//读取临时文件
+	file, err := os.ReadFile("./temp/" + fileName + ".tmp")
+	if err != nil {
+		return nil, false
+	}
+
+	return file, true
 }
 
 func getHasDownedFilePiece(start, size int, fileName string) ([]byte, bool) {

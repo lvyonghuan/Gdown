@@ -1,4 +1,7 @@
-
 server/server.exe
 server/server
 client/client.exe
+server/file/银河系漫游指南.mp4
+server/fileInfo/银河系漫游指南.mp4.god
+client/down/银河系漫游指南.mp4
+client/fileInfo/银河系漫游指南.mp4.god
