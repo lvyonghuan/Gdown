@@ -3,7 +3,6 @@ package server
 import (
 	"log"
 	"net/http"
-	"strings"
 	"time"
 
 	"Gdown/server/user"
@@ -46,7 +45,10 @@ func InitRouter() {
 }
 
 func getFileList(c *gin.Context) {
-	if _, ok := clientList[c.ClientIP()]; !ok {
+	port := c.GetHeader("X-User-Port")
+	ip := c.ClientIP() + ":" + port
+
+	if _, ok := clientList[ip]; !ok {
 		c.JSON(http.StatusForbidden, gin.H{
 			"message": "客户端未建立连接",
 		})
@@ -58,6 +60,9 @@ func getFileList(c *gin.Context) {
 	var fl fileList
 	err := c.BindJSON(&fl)
 	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"message": "传输格式错误",
+		})
 		log.Println("客户端发送的文件列表格式错误：", err)
 		return
 	}
@@ -65,8 +70,12 @@ func getFileList(c *gin.Context) {
 		if _, ok := fileLists[fileName]; !ok { //健壮性检查
 			continue
 		}
-		fileLists[fileName].ipAdr.Store(c.ClientIP()+getPort(c.Request), true) //将客户端ip追加到文件的列表当中去
+		fileLists[fileName].ipAdr.Store(ip, true) //将客户端ip追加到文件的列表当中去
 	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "文件列表接收成功",
+	})
 }
 
 // websocket连接的处理函数,用于检测客户端是否下线
@@ -170,11 +179,4 @@ func deleteFileIP(cli *client) {
 		file := cli.DownFileList[i]
 		file.ipAdr.Delete(cli.IPAdr)
 	}
-}
-
-// 获取客户端端口号
-func getPort(r *http.Request) string {
-	ip := strings.Split(r.RemoteAddr, ":")
-	log.Println(ip)
-	return ":" + ip[1] //返回端口号
 }

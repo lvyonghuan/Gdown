@@ -1,7 +1,12 @@
 package client
 
 import (
+	"bytes"
+	"encoding/json"
 	"github.com/gin-gonic/gin"
+	"io"
+	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -54,6 +59,15 @@ func getPiece(c *gin.Context) {
 		return
 	}
 
+	fileSize := c.GetHeader("Size")
+	size, err := strconv.Atoi(fileSize)
+	if err != nil {
+		c.JSON(400, gin.H{
+			"message": "Size格式错误",
+		})
+		return
+	}
+
 	//检查文件名是否存在各个文件列表中。
 	fileData, ok := isDowningQueue[fileName]
 	if ok {
@@ -69,7 +83,7 @@ func getPiece(c *gin.Context) {
 	}
 	_, ok = hasDownedQueue[fileName]
 	if ok {
-		filePiece, isExist := getHasDownedFilePiece(start, fileName)
+		filePiece, isExist := getHasDownedFilePiece(start, size, fileName)
 		if !isExist {
 			c.JSON(400, gin.H{
 				"message": "文件已移除",
@@ -95,13 +109,13 @@ func getIsDowningFilePiece(start int, fileData *isDowning) ([]byte, bool) {
 	return p.data, true
 }
 
-func getHasDownedFilePiece(start int, fileName string) ([]byte, bool) {
+func getHasDownedFilePiece(start, size int, fileName string) ([]byte, bool) {
 	file, err := os.Open("./down/" + fileName)
 	if err != nil {
 		return nil, false
 	}
 	defer file.Close()
-	filePiece := make([]byte, blockSize) //这大概会对最后一片有影响？
+	filePiece := make([]byte, size)
 	_, err = file.ReadAt(filePiece, int64(start))
 	if err != nil {
 		return nil, false
@@ -140,4 +154,58 @@ func getPieceStart(fileRange string) (int, bool) {
 	}
 
 	return start, true
+}
+
+// 将已下载的文件列表传输到服务器上，同时初始化hasDownQueue
+func sendFileList() {
+	//初始化已下载文件队列
+	hasDownedQueue = make(map[string]struct{})
+
+	//获取已下载文件列表
+	type fileList struct {
+		FileName []string `json:"file_name"`
+	}
+	var fl fileList
+	files, err := os.ReadDir("./down")
+	if err != nil {
+		log.Fatalf("读取已下载文件列表失败：%v", err)
+	}
+
+	for _, file := range files {
+		fl.FileName = append(fl.FileName, file.Name())
+		hasDownedQueue[file.Name()] = struct{}{}
+	}
+
+	//将已下载文件列表传输到服务器上
+	u := "http://" + cfg.ServiceAdr + "/list"
+	encodeData, err := json.Marshal(fl)
+	if err != nil {
+		log.Fatalf("序列化文件列表失败:%v", err)
+	}
+
+	req, err := http.NewRequest("POST", u, bytes.NewBuffer(encodeData))
+	if err != nil {
+		log.Fatalf("创建请求失败:%v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Length", strconv.Itoa(len(encodeData)))
+	req.Header.Set("User-Agent", "GDown")
+	req.Header.Set("X-User-Port", strconv.Itoa(cfg.ClientPort))
+
+	client := http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatalf("发送请求失败:%v", err)
+	}
+
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatalf("读取服务器回传信息失败:%v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		log.Fatalf("服务器回传信息错误:%v", string(body))
+	}
 }

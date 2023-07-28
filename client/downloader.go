@@ -56,7 +56,6 @@ type fileData struct {
 func downControl() {
 	//初始化下载队列
 	isDowningQueue = make(map[string]*isDowning)
-	hasDownedQueue = make(map[string]struct{})
 
 	//启动下载进程
 	for {
@@ -83,7 +82,7 @@ func fileHandler(fileName string) {
 	for i, j := 0, 0; i < pieceNum; i++ { //轮询多线程下载
 		var client string
 		//获取除了自己以外的client
-		for ; ; j++ {
+		for j++; ; j++ {
 			if j >= len(engine.ipAdr) {
 				j = 0
 			}
@@ -256,6 +255,7 @@ func (d *downEngine) downPiece(index int, client string) ([]byte, bool) {
 	req.Header.Set("Content-Length", strconv.Itoa(len(encodeData)))
 	req.Header.Set("User-Agent", "GDown")
 	req.Header.Set("Range", "bytes="+startStr+"-"+endStr)
+	req.Header.Set("Size", strconv.Itoa(d.fileInfo.FilePieces[index].PieceSize))
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

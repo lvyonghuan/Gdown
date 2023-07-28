@@ -25,6 +25,7 @@ func connect() {
 	go hotReset()
 	//心跳和断线检测
 	go heartBeat(conn)
+	sendFileList() //发送文件列表
 	//TODO:断线重连
 }
 
