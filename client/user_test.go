@@ -1,6 +1,7 @@
-package client
+package main_test
 
 import (
+	"Gdown/client/cli"
 	"sync"
 	"testing"
 )
@@ -17,12 +18,12 @@ import (
 //}
 
 func TestDown(t *testing.T) {
-	readConfig()
-	login()
+	cli.ReadConfig()
+	cli.Login()
 	var wa sync.WaitGroup
 	wa.Add(1)
-	go initRouters()
-	go downControl()
-	downChan <- "Automation.mp3"
+	go cli.InitRouters()
+	go cli.DownControl()
+	cli.DownChan <- "Automation.mp3"
 	wa.Wait()
 }

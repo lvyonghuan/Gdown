@@ -1,4 +1,4 @@
-package client
+package cli
 
 import (
 	"bytes"
@@ -10,8 +10,8 @@ import (
 
 //客户端注册登录
 
-// 注册
-func register() {
+// Register 注册
+func Register() {
 	//获取用户注册信息
 	type register struct {
 		Username string `json:"username"`
@@ -59,7 +59,7 @@ func register() {
 }
 
 // 登录
-func login() {
+func Login() {
 	//获取用户登录信息
 	type loginInfo struct {
 		Username string `json:"username"`

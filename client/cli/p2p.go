@@ -1,4 +1,4 @@
-package client
+package cli
 
 import (
 	"bytes"
@@ -25,7 +25,7 @@ var (
 	hasDownedQueue map[string]struct{}   //已经下载的文件队列
 )
 
-func initRouters() {
+func InitRouters() {
 	r := gin.Default()
 	r.GET("/down", getPiece)
 	r.Run(":" + strconv.Itoa(cfg.ClientPort))

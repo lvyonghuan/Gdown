@@ -1,4 +1,4 @@
-package client
+package cli
 
 import (
 	"log"
@@ -24,7 +24,7 @@ type config struct {
 var cfg config
 
 // 读取配置文件
-func readConfig() {
+func ReadConfig() {
 	viper.SetConfigName("config.toml")
 	viper.SetConfigType("toml")
 	viper.AddConfigPath("./")

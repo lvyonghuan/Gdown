@@ -1,4 +1,4 @@
-package client
+package cli
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ import (
 //5.每隔一段时间向文件服务器询问最新的客户端列表。
 //6.对应3：如果一个客户端跑满了（达到了上传速率限制），则也询问下一个客户端or服务器。
 
-var downChan = make(chan string, 10) //下载任务队列（限制同时下载的文件数）
+var DownChan = make(chan string, 10) //下载任务队列（限制同时下载的文件数）
 
 // 下载引擎
 type downEngine struct {
@@ -53,14 +53,14 @@ type fileData struct {
 }
 
 // 下载总控器
-func downControl() {
+func DownControl() {
 	//初始化下载队列
 	isDowningQueue = make(map[string]*isDowning)
 
 	//启动下载进程
 	for {
 		select {
-		case fileName := <-downChan:
+		case fileName := <-DownChan:
 			go fileHandler(fileName)
 		}
 	}
