@@ -105,7 +105,7 @@ func fileHandler(fileName string) {
 		//打印下载进度
 		successNum++
 		percentage := float64(successNum) / float64(pieceNum) * 100
-		log.Printf("下载进度：%.2f%%", percentage)
+		log.Printf(fileName+"下载进度：%.2f%%", percentage)
 
 		//将分片加入到正在下载队列中。使用goroutine，避免阻塞主线程。
 		k := i

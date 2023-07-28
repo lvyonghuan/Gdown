@@ -1,7 +1,10 @@
-package server
+package main_test
 
-import "testing"
+import (
+	"Gdown/server/src"
+	"testing"
+)
 
 func TestFile(t *testing.T) {
-	loadFile()
+	src.LoadFile()
 }

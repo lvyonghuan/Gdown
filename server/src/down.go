@@ -1,4 +1,4 @@
-package server
+package src
 
 import (
 	"os"

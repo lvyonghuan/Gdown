@@ -1,11 +1,10 @@
-package server
+package src
 
 import (
+	"Gdown/server/src/user"
 	"log"
 	"net/http"
 	"time"
-
-	"Gdown/server/user"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"

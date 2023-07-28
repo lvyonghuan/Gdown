@@ -1,4 +1,4 @@
-package server
+package src
 
 //处理文件信息，对服务器内文件进行“做种”处理
 
@@ -31,8 +31,8 @@ type Piece struct {
 	PieceHash  uint32 //分片的哈希值，用于校验
 }
 
-// 遍历file目录，加载file目录下的文件，并且将它们分片存储，最后格式化为toml配置文件
-func loadFile() {
+// LoadFile 遍历file目录，加载file目录下的文件，并且将它们分片存储，最后格式化为toml配置文件
+func LoadFile() {
 	files, err := os.ReadDir("./file")
 	if err != nil {
 		log.Fatalf(err.Error())
