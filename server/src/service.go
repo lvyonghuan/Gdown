@@ -74,6 +74,7 @@ func getFileList(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "文件列表接收成功",
+		"ipAdr":   c.ClientIP(), //返回客户端的真实ip地址
 	})
 }
 

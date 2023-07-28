@@ -7,6 +7,8 @@ import (
 	"strconv"
 )
 
+var trueIpAdr string //客户端的真实IP地址，在传输已下载文件列表成功之后返回
+
 //与服务器对接
 
 // 与服务器建立websocket连接，并且进行持续性的心跳检测
@@ -39,7 +41,6 @@ func heartBeat(conn *websocket.Conn) {
 			return
 		}
 		if typ == websocket.TextMessage {
-			log.Println("ping!")
 			err = conn.WriteMessage(websocket.TextMessage, []byte("pong!"))
 			if err != nil {
 				log.Println("发送心跳包失败:", err)

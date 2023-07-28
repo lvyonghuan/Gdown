@@ -86,7 +86,7 @@ func fileHandler(fileName string) {
 			if j >= len(engine.ipAdr) {
 				j = 0
 			}
-			if engine.ipAdr[j] != "127.0.0.1:"+strconv.Itoa(cfg.ClientPort) {
+			if engine.ipAdr[j] != trueIpAdr+":"+strconv.Itoa(cfg.ClientPort) {
 				client = engine.ipAdr[j]
 				break
 			}

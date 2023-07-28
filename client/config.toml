@@ -1,4 +1,4 @@
-service_adr="140.143.151.99:8080"
+service_adr="127.0.0.1:8080"
 username="test"
 Password="test"
 client_port=11452

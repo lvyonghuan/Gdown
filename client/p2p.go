@@ -208,4 +208,16 @@ func sendFileList() {
 	if resp.StatusCode != http.StatusOK {
 		log.Fatalf("服务器回传信息错误:%v", string(body))
 	}
+
+	//获取真实ip
+	type message struct {
+		Message string `json:"message"`
+		IpAdr   string `json:"ipAdr"`
+	}
+	var m message
+	err = json.Unmarshal(body, &m)
+	if err != nil {
+		log.Fatalf("获取真实ip失败:%v", err)
+	}
+	trueIpAdr = m.IpAdr
 }
