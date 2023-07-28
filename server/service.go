@@ -17,7 +17,7 @@ type client struct {
 	DownFileList map[string]*FileInfo //维护客户端下载的文件列表。客户端下线的时候，从每个文件列表里把它删掉。
 }
 
-var clientList = make(map[string]bool) //维护客户端列表。
+var clientList = make(map[string]*client) //维护客户端列表。
 
 var upgrade = websocket.Upgrader{
 	ReadBufferSize:  1024,
@@ -46,7 +46,7 @@ func InitRouter() {
 }
 
 func getFileList(c *gin.Context) {
-	if isConnect, ok := clientList[c.ClientIP()]; !ok || !isConnect {
+	if _, ok := clientList[c.ClientIP()]; !ok {
 		c.JSON(http.StatusForbidden, gin.H{
 			"message": "客户端未建立连接",
 		})
@@ -97,7 +97,10 @@ func connect(c *gin.Context) {
 
 	var cli client
 	cli.IPAdr = c.ClientIP() + ":" + c.GetHeader("X-User-Port")
-	clientList[cli.IPAdr] = true
+	clientList[cli.IPAdr] = &cli                                    //将客户端加入到客户端列表当中去
+	clientList[cli.IPAdr].DownFileList = make(map[string]*FileInfo) //初始化客户端的下载文件列表
+
+	//升级为websocket协议，维护心跳
 	conn, err := upgrade.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		log.Println("与客户端建立连接失败，websocket升级错误：", err)

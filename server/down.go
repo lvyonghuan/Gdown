@@ -24,7 +24,7 @@ func sendMetaDate(c *gin.Context) {
 	fileName := request.FileName
 
 	//检查文件名是否存在在文件列表中
-	_, ok := fileLists[fileName]
+	fileInfo, ok := fileLists[fileName]
 	if !ok {
 		c.JSON(404, gin.H{
 			"message": "文件不存在",
@@ -39,8 +39,19 @@ func sendMetaDate(c *gin.Context) {
 		})
 		return
 	}
+
+	ip := c.ClientIP() + ":" + c.GetHeader("X-User-Port") //获取客户端的ip地址
+	//在客户端列表中添加此文件
+	client, ok := clientList[ip]
+	if !ok {
+		c.JSON(403, gin.H{
+			"message": "客户端未建立连接",
+		})
+		return
+	}
+	client.DownFileList[fileName] = fileInfo //将此文件加入到客户端的下载文件列表当中去
+
 	//将此客户端的ip地址加入到文件的ip列表当中去
-	ip := c.ClientIP() + ":" + c.GetHeader("X-User-Port")
 	fileLists[fileName].ipAdr.Store(ip, true)
 	//获取拥有此文件的客户端的IP地址
 	var ipAdr []string
