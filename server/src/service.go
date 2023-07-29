@@ -47,7 +47,8 @@ func getFileList(c *gin.Context) {
 	port := c.GetHeader("X-User-Port")
 	ip := c.ClientIP() + ":" + port
 
-	if _, ok := clientList[ip]; !ok {
+	client, ok := clientList[ip]
+	if !ok {
 		c.JSON(http.StatusForbidden, gin.H{
 			"message": "客户端未建立连接",
 		})
@@ -69,7 +70,8 @@ func getFileList(c *gin.Context) {
 		if _, ok := fileLists[fileName]; !ok { //健壮性检查
 			continue
 		}
-		fileLists[fileName].ipAdr.Store(ip, true) //将客户端ip追加到文件的列表当中去
+		fileLists[fileName].ipAdr.Store(ip, true)           //将客户端ip追加到文件的列表当中去
+		client.DownFileList[fileName] = fileLists[fileName] //将此文件加入到客户端的下载文件列表当中去
 	}
 
 	c.JSON(http.StatusOK, gin.H{

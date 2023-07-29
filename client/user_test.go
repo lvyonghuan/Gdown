@@ -24,6 +24,6 @@ func TestDown(t *testing.T) {
 	wa.Add(1)
 	go cli.InitRouters()
 	go cli.DownControl()
-	cli.DownChan <- "Automation.mp3"
+	cli.DownChan <- "银河系漫游指南.mp4"
 	wa.Wait()
 }

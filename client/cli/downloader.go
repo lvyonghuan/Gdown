@@ -11,6 +11,8 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"sync"
+	"time"
 )
 
 //下载模块
@@ -21,13 +23,22 @@ import (
 //5.每隔一段时间向文件服务器询问最新的客户端列表。
 //6.对应3：如果一个客户端跑满了（达到了上传速率限制），则也询问下一个客户端or服务器。
 
-var DownChan = make(chan string, 10) //下载任务队列（限制同时下载的文件数）
+var (
+	DownChan        = make(chan string, 10)  //下载任务队列（限制同时下载的文件数）
+	downMessageChan = make(chan downMessage) //下载消息队列，用于多线程下载
+)
 
 // 下载引擎
 type downEngine struct {
-	fileName string   //下载的文件名
-	ipAdr    []string //拥有该文件的客户端ip列表
-	fileInfo fileInfo
+	fileName   string   //下载的文件名
+	ipAdr      []string //拥有该文件的客户端ip列表
+	fileInfo   fileInfo
+	fileQueue  []tempFileInfo //文件队列，用于记录下载成功的分片，按照顺序进行排列
+	downQueue  []int          //下载队列，排队下载
+	successNum int            //下载成功的分片数
+	finish     chan string    //下载完成信号
+	wg         sync.WaitGroup //等待所有分片下载完成
+	mu         sync.Mutex     //防止并发写successNum的时候冲突
 }
 
 // 文件元数据
@@ -45,16 +56,16 @@ type piece struct {
 	PieceHash  uint32 //分片的哈希值，用于校验
 }
 
-// 分片数据，保证分片的排序一致性
-type fileData struct {
-	index int    //文件的实际分片数
-	data  []byte //文件的数据
-}
-
 // 临时文件信息
 type tempFileInfo struct {
 	index int
 	name  string
+}
+
+// 管道传递的消息
+type downMessage struct {
+	index  int
+	client string
 }
 
 // DownControl 下载总控器
@@ -78,96 +89,91 @@ func fileHandler(fileName string) {
 	pieceNum := engine.fileInfo.FilePiecesNum           //获取文件的分片数
 	engine.ipAdr = append(engine.ipAdr, cfg.ServiceAdr) //将服务器也作为一个下载节点
 
-	var fileQueue []tempFileInfo                                           //文件队列，用于记录下载成功的分片，按照顺序进行排列
-	var failQueue []int                                                    //失败队列，用于记录下载失败的分片的索引
 	isDowningQueue[fileName] = &isDowning{filePiece: make(map[int]string)} //将文件加入到正在下载的队列中
 
-	successNum := 0 //下载成功的分片数
-
-	for i, j := 0, 0; i < pieceNum; i++ { //轮询多线程下载
-		var client string
-		//获取除了自己以外的client
-		for j++; ; j++ {
-			if j >= len(engine.ipAdr) {
-				j = 0
-			}
-			if engine.ipAdr[j] != trueIpAdr+":"+strconv.Itoa(cfg.ClientPort) {
-				client = engine.ipAdr[j]
-				break
-			}
-		}
-
-		//下载分片
-		data, isSuccess := engine.downPiece(i, client)
-		if !isSuccess {
-			failQueue = append(failQueue, i)
-			continue
-		}
-
-		//将分片写成临时文件
-		if !writeTempFile(data, i, fileName) {
-			log.Println("第" + strconv.Itoa(i) + "片写入临时文件失败")
-			failQueue = append(failQueue, i)
-			continue
-		}
-
-		//将分片加入到文件队列中
-		fileQueue = append(fileQueue, tempFileInfo{i, "./temp/" + fileName + strconv.Itoa(i) + ".tmp"})
-
-		//打印下载进度
-		successNum++
-		percentage := float64(successNum) / float64(pieceNum) * 100
-		log.Printf(fileName+"下载进度：%.2f%%", percentage)
-
-		//将分片加入到正在下载队列中。使用goroutine，避免阻塞主线程。
-		k := i
-		go func() {
-			isDowningQueue[fileName].mu.Lock()
-			isDowningQueue[fileName].filePiece[engine.fileInfo.FilePieces[k].PieceStart] = fileName + strconv.Itoa(k)
-			isDowningQueue[fileName].mu.Unlock()
-		}()
+	engine.downQueue = make([]int, 0, pieceNum)
+	//初始化下载队列
+	for i := 0; i < pieceNum; i++ {
+		engine.downQueue = append(engine.downQueue, i)
 	}
 
-	//重新下载失败的队列
-	for _, i := range failQueue {
-		data, isSuccess := engine.downPiece(i, cfg.ServiceAdr) //直接从服务器获取失败的数据
-		if !isSuccess {
-			log.Println("第" + strconv.Itoa(i) + "片下载失败,文件损坏，请重新下载") //再失败就不重试了
-			//TODO:其实也可以再重试几轮
+	go multithreadingControl(engine)
+
+	var j = 0 //p2p服务端轮询控制
+	for engine.successNum < pieceNum {
+		for _, i := range engine.downQueue {
+			var client string
+			//获取除了自己以外的client
+			for j++; ; j++ {
+				if j >= len(engine.ipAdr) {
+					j = 0
+				}
+				if engine.ipAdr[j] != trueIpAdr+":"+strconv.Itoa(cfg.ClientPort) {
+					client = engine.ipAdr[j]
+					break
+				}
+			}
+			downMessageChan <- downMessage{i, client}
+			engine.downQueue = engine.downQueue[1:] //移除遍历到的元素
 		}
-
-		//将分片写成临时文件
-		if !writeTempFile(data, i, fileName) {
-			log.Println("第" + strconv.Itoa(i) + "片写入临时文件失败")
-			failQueue = append(failQueue, i)
-			continue
-		}
-
-		fileQueue = append(fileQueue, tempFileInfo{i, "./temp/" + fileName + strconv.Itoa(i) + ".tmp"})
-		successNum++
-		percentage := float64(successNum) / float64(pieceNum) * 100
-		log.Printf(fileName+"下载进度：%.2f%%", percentage)
-
-		k := i
-		go func() {
-			isDowningQueue[fileName].mu.Lock()
-			isDowningQueue[fileName].filePiece[engine.fileInfo.FilePieces[k].PieceStart] = fileName + strconv.Itoa(k)
-			isDowningQueue[fileName].mu.Unlock()
-		}()
+		time.Sleep(time.Second * 1)
 	}
 
-	//将文件队列按照顺序写入文件
-	writeFile(fileQueue, fileName)
-	//将文件从正在下载队列中移除
-	isDowningQueue[fileName].mu.Lock()
-	delete(isDowningQueue, fileName)
-	hasDownedQueue[fileName] = struct{}{} //将文件加入到已下载队列中
+	engine.wg.Add(1)
+	//下载完成，发送下载完成信号
+	engine.finish <- fileName
+	engine.wg.Wait()
+}
+
+// 多线程下载控制器
+func multithreadingControl(engine *downEngine) {
+	//i, j := 0, 0
+	for {
+		select {
+		case msg := <-downMessageChan:
+			go func() {
+				data, isSuccess := engine.downPiece(msg.index, msg.client)
+				if !isSuccess {
+					engine.downQueue = append(engine.downQueue, msg.index) //下载失败，重新加入到下载队列中
+					return
+				}
+				//i++
+				//log.Println("i:", i)
+				if !writeTempFile(data, msg.index, engine.fileName) {
+					engine.downQueue = append(engine.downQueue, msg.index) //下载失败，重新加入到下载队列中
+					return
+				}
+				//j++
+				//log.Println("j:", j)
+
+				engine.mu.Lock() //防止并发写successNum的时候冲突
+				//将分片加入到文件队列中
+				engine.fileQueue = append(engine.fileQueue, tempFileInfo{msg.index, "./temp/" + engine.fileName + strconv.Itoa(msg.index) + ".tmp"})
+
+				//打印下载进度
+				engine.successNum++
+				percentage := float64(engine.successNum) / float64(engine.fileInfo.FilePiecesNum) * 100
+				log.Printf(engine.fileName+"下载进度：%.2f%%", percentage)
+				engine.mu.Unlock()
+			}()
+		case fileName := <-engine.finish:
+			writeFile(engine.fileQueue, fileName)
+			//将文件从正在下载队列中移除
+			isDowningQueue[fileName].mu.TryLock()
+			delete(isDowningQueue, fileName)
+			hasDownedQueue[fileName] = struct{}{} //将文件加入到已下载队列中
+			engine.wg.Done()
+			return
+		}
+	}
 }
 
 // 新建下载任务
 func newDownTask(fileName string) *downEngine {
 	var d downEngine
 	d.fileName = fileName
+	d.successNum = 0
+	d.finish = make(chan string)
 	d.getMetaData()
 	return &d
 }
@@ -196,7 +202,9 @@ func (d *downEngine) getMetaData() {
 	req.Header.Set("User-Agent", "GDown")
 	req.Header.Set("X-User-Port", strconv.Itoa(cfg.ClientPort))
 
-	client := http.Client{}
+	client := http.Client{
+		Timeout: time.Second * 10, //设置超时时间
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Println("发送请求失败:", err)
@@ -277,7 +285,10 @@ func (d *downEngine) downPiece(index int, client string) ([]byte, bool) {
 	req.Header.Set("Range", "bytes="+startStr+"-"+endStr)
 	req.Header.Set("Size", strconv.Itoa(d.fileInfo.FilePieces[index].PieceSize))
 
-	resp, err := http.DefaultClient.Do(req)
+	c := http.Client{
+		Timeout: 30 * time.Second, //设置超时时间
+	}
+	resp, err := c.Do(req)
 	if err != nil {
 		log.Println("发送请求失败:", err)
 		return nil, false
@@ -308,7 +319,7 @@ func writeFile(filesData []tempFileInfo, fileName string) {
 	})
 
 	//合并临时文件
-	file, err := os.OpenFile("./down/"+fileName, os.O_CREATE|os.O_WRONLY, 0666)
+	file, err := os.OpenFile("./down/"+fileName, os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		log.Println("创建文件失败:", err)
 		return
@@ -325,6 +336,7 @@ func writeFile(filesData []tempFileInfo, fileName string) {
 			log.Println("写入文件失败:", err)
 			return
 		}
+		filesData = filesData[1:] //移除遍历到的元素
 		err = os.Remove(fileData.name)
 		if err != nil {
 			log.Println("删除临时文件失败:", err)
