@@ -17,7 +17,7 @@ import (
 
 type isDowning struct {
 	mu        sync.Mutex
-	filePiece map[int]string //key为起始位置，value为第几片的索引
+	filePiece map[int]string //key为起始位置，value为临时分片的name
 }
 
 var (
@@ -36,6 +36,14 @@ func InitRouters() {
 // 经下完了被请求的文件；3，客户端下完了被请求的文件，但是文件已经被删除or移动了。
 // 4，客户端没有被请求的文件。
 func getPiece(c *gin.Context) {
+	//上传限速
+	if !upLimitGet() {
+		c.JSON(400, gin.H{
+			"message": "上传限速",
+		})
+		return
+	}
+	defer upDown() //放回令牌
 	//获取客户端请求的文件名
 	var request struct {
 		FileName string `json:"file_name"`

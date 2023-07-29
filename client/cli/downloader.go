@@ -304,6 +304,7 @@ func (d *downEngine) downPiece(index int, client string) ([]byte, bool) {
 		log.Println("第" + strconv.Itoa(index) + "片校验失败")
 		return nil, false
 	}
+	isDowningQueue[d.fileName].filePiece[start] = client //将分片加入到正在下载的队列中
 	return body, true
 }
 
