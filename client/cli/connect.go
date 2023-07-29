@@ -23,6 +23,8 @@ func connect() {
 		log.Println("与服务器建立连接失败:", err)
 		return
 	}
+	//启动限速器
+	limit()
 	//开启配置文件监视器
 	go hotReset()
 	//心跳和断线检测

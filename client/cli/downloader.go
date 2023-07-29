@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/gob"
 	"encoding/json"
 	"hash/crc32"
@@ -127,24 +128,21 @@ func fileHandler(fileName string) {
 
 // 多线程下载控制器
 func multithreadingControl(engine *downEngine) {
-	//i, j := 0, 0
 	for {
 		select {
 		case msg := <-downMessageChan:
 			go func() {
+				downLimitGet()   //下载限速，获取令牌
+				defer downDown() //放回令牌
 				data, isSuccess := engine.downPiece(msg.index, msg.client)
 				if !isSuccess {
 					engine.downQueue = append(engine.downQueue, msg.index) //下载失败，重新加入到下载队列中
 					return
 				}
-				//i++
-				//log.Println("i:", i)
 				if !writeTempFile(data, msg.index, engine.fileName) {
 					engine.downQueue = append(engine.downQueue, msg.index) //下载失败，重新加入到下载队列中
 					return
 				}
-				//j++
-				//log.Println("j:", j)
 
 				engine.mu.Lock() //防止并发写successNum的时候冲突
 				//将分片加入到文件队列中
@@ -203,7 +201,7 @@ func (d *downEngine) getMetaData() {
 	req.Header.Set("X-User-Port", strconv.Itoa(cfg.ClientPort))
 
 	client := http.Client{
-		Timeout: time.Second * 10, //设置超时时间
+		Timeout: time.Second * 30, //设置超时时间
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -255,8 +253,6 @@ func (d *downEngine) unmarshalGod() {
 
 // 下载分片数据
 func (d *downEngine) downPiece(index int, client string) ([]byte, bool) {
-	downLimitGet()   //下载限速，获取令牌
-	defer downDown() //放回令牌
 	u := "http://" + client + "/down"
 	var data struct {
 		FileName string `json:"file_name"`
@@ -268,7 +264,9 @@ func (d *downEngine) downPiece(index int, client string) ([]byte, bool) {
 		return nil, false
 	}
 
-	req, err := http.NewRequest("GET", u, bytes.NewBuffer(encodeData))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", u, bytes.NewBuffer(encodeData))
 	if err != nil {
 		log.Println("创建请求失败:", err)
 		return nil, false
@@ -285,9 +283,7 @@ func (d *downEngine) downPiece(index int, client string) ([]byte, bool) {
 	req.Header.Set("Range", "bytes="+startStr+"-"+endStr)
 	req.Header.Set("Size", strconv.Itoa(d.fileInfo.FilePieces[index].PieceSize))
 
-	c := http.Client{
-		Timeout: 30 * time.Second, //设置超时时间
-	}
+	c := http.Client{}
 	resp, err := c.Do(req)
 	if err != nil {
 		log.Println("发送请求失败:", err)
