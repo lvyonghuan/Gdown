@@ -15,14 +15,24 @@ import (
 
 //p2p控制器，协调资源，作为客户端请求的入口和p2p相关问题的判断
 
+// 下载队列结构，用于一个客户端向正在下载的客户端发起请求时，判断是否存在该分片
 type isDowning struct {
 	mu        sync.Mutex
 	filePiece map[int]string //key为起始位置，value为临时分片的name
 }
 
+// 客户端结构，记录客户端信息，做出更多的判断
+type client struct {
+	IPAdr     string     //客户端ip地址
+	fallTimes int        //客户端连续失败次数
+	isServer  bool       //是否是服务器
+	isGet     sync.Mutex //是否被删除器获取
+}
+
 var (
 	isDowningQueue map[string]*isDowning //正在下载的文件队列
 	hasDownedQueue map[string]struct{}   //已经下载的文件队列
+	isDowningMu    sync.Mutex            //并发安全
 )
 
 func InitRouters() {
@@ -235,4 +245,11 @@ func sendFileList() {
 		log.Fatalf("获取真实ip失败:%v", err)
 	}
 	trueIpAdr = m.IpAdr
+}
+
+// 移除失效的客户端列表
+func (engine *downEngine) removeFallClient(index int) {
+	engine.clientMu.Lock()
+	defer engine.clientMu.Unlock()
+	engine.ipAdr = append(engine.ipAdr[:index], engine.ipAdr[index+1:]...)
 }

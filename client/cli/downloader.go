@@ -25,21 +25,29 @@ import (
 //6.对应3：如果一个客户端跑满了（达到了上传速率限制），则也询问下一个客户端or服务器。
 
 var (
-	DownChan        = make(chan string, 10)  //下载任务队列（限制同时下载的文件数）
-	downMessageChan = make(chan downMessage) //下载消息队列，用于多线程下载
+	DownChan = make(chan string, 10) //下载任务队列（限制同时下载的文件数）
+)
+
+const (
+	success         = 0
+	clientErr       = 1
+	serverNormalErr = 400
+	fallErr         = 2
 )
 
 // 下载引擎
 type downEngine struct {
-	fileName   string   //下载的文件名
-	ipAdr      []string //拥有该文件的客户端ip列表
-	fileInfo   fileInfo
-	fileQueue  []tempFileInfo //文件队列，用于记录下载成功的分片，按照顺序进行排列
-	downQueue  []int          //下载队列，排队下载
-	successNum int            //下载成功的分片数
-	finish     chan string    //下载完成信号
-	wg         sync.WaitGroup //等待所有分片下载完成
-	mu         sync.Mutex     //防止并发写successNum的时候冲突
+	fileName        string    //下载的文件名
+	ipAdr           []*client //拥有该文件的客户端ip列表
+	fileInfo        fileInfo
+	fileQueue       []tempFileInfo   //文件队列，用于记录下载成功的分片，按照顺序进行排列
+	downQueue       []int            //下载队列，排队下载
+	successNum      int              //下载成功的分片数
+	finish          chan string      //下载完成信号
+	wg              sync.WaitGroup   //等待所有分片下载完成
+	mu              sync.Mutex       //防止并发写successNum的时候冲突
+	downMessageChan chan downMessage //下载消息队列
+	clientMu        sync.Mutex       //客户端列表的互斥锁，用于删除客户端时防止冲突
 }
 
 // 文件元数据
@@ -65,8 +73,9 @@ type tempFileInfo struct {
 
 // 管道传递的消息
 type downMessage struct {
-	index  int
-	client string
+	index       int //分片索引
+	client      *client
+	clientIndex int //客户端在ipAdr中的索引，用于删除客户端
 }
 
 // DownControl 下载总控器
@@ -85,10 +94,16 @@ func DownControl() {
 
 // 单个文件的下载控制调度器
 func fileHandler(fileName string) {
-	engine := newDownTask(fileName)                     //新建下载任务
-	engine.getMetaData()                                //获取文件元数据
-	pieceNum := engine.fileInfo.FilePiecesNum           //获取文件的分片数
-	engine.ipAdr = append(engine.ipAdr, cfg.ServiceAdr) //将服务器也作为一个下载节点
+	engine := newDownTask(fileName)           //新建下载任务
+	pieceNum := engine.fileInfo.FilePiecesNum //获取文件的分片数
+
+	//将服务器也作为一个下载节点
+	serverAdr := client{
+		IPAdr:     cfg.ServiceAdr,
+		fallTimes: 0,
+		isServer:  true,
+	}
+	engine.ipAdr = append(engine.ipAdr, &serverAdr) //将服务器也作为一个下载节点
 
 	isDowningQueue[fileName] = &isDowning{filePiece: make(map[int]string)} //将文件加入到正在下载的队列中
 
@@ -98,23 +113,26 @@ func fileHandler(fileName string) {
 		engine.downQueue = append(engine.downQueue, i)
 	}
 
-	go multithreadingControl(engine)
+	go engine.multithreadingControl()
 
 	var j = 0 //p2p服务端轮询控制
 	for engine.successNum < pieceNum {
 		for _, i := range engine.downQueue {
-			var client string
+			var client *client
 			//获取除了自己以外的client
 			for j++; ; j++ {
 				if j >= len(engine.ipAdr) {
 					j = 0
 				}
-				if engine.ipAdr[j] != trueIpAdr+":"+strconv.Itoa(cfg.ClientPort) {
+				engine.clientMu.Lock()
+				if engine.ipAdr[j].IPAdr != trueIpAdr+":"+strconv.Itoa(cfg.ClientPort) {
 					client = engine.ipAdr[j]
+					engine.clientMu.Unlock()
 					break
 				}
+				engine.clientMu.Unlock()
 			}
-			downMessageChan <- downMessage{i, client}
+			engine.downMessageChan <- downMessage{i, client, j}
 			engine.downQueue = engine.downQueue[1:] //移除遍历到的元素
 		}
 		time.Sleep(time.Second * 1)
@@ -127,16 +145,23 @@ func fileHandler(fileName string) {
 }
 
 // 多线程下载控制器
-func multithreadingControl(engine *downEngine) {
+func (engine *downEngine) multithreadingControl() {
 	for {
 		select {
-		case msg := <-downMessageChan:
+		case msg := <-engine.downMessageChan:
 			go func() {
 				downLimitGet()   //下载限速，获取令牌
 				defer downDown() //放回令牌
-				data, isSuccess := engine.downPiece(msg.index, msg.client)
+				data, isSuccess, code := engine.downPiece(msg.index, msg.client.IPAdr)
 				if !isSuccess {
 					engine.downQueue = append(engine.downQueue, msg.index) //下载失败，重新加入到下载队列中
+					if code == fallErr {
+						msg.client.fallTimes++
+						if msg.client.fallTimes >= 3 && !msg.client.isServer { //大于等于3时且不是服务器且未被其它goroutine获取时，移除该客户端
+							msg.client.isGet.Lock()
+							engine.removeFallClient(msg.clientIndex)
+						}
+					}
 					return
 				}
 				if !writeTempFile(data, msg.index, engine.fileName) {
@@ -172,18 +197,19 @@ func newDownTask(fileName string) *downEngine {
 	d.fileName = fileName
 	d.successNum = 0
 	d.finish = make(chan string)
+	d.downMessageChan = make(chan downMessage)
 	d.getMetaData()
 	return &d
 }
 
 // 从服务器获取元数据，实际上就是获取种子文件
-func (d *downEngine) getMetaData() {
+func (engine *downEngine) getMetaData() {
 	u := "http://" + cfg.ServiceAdr + "/meta"
 
 	var data struct {
 		FileName string `json:"file_name"`
 	}
-	data.FileName = d.fileName
+	data.FileName = engine.fileName
 	encodeData, err := json.Marshal(data)
 	if err != nil {
 		log.Println("序列化文件名失败:", err)
@@ -200,10 +226,10 @@ func (d *downEngine) getMetaData() {
 	req.Header.Set("User-Agent", "GDown")
 	req.Header.Set("X-User-Port", strconv.Itoa(cfg.ClientPort))
 
-	client := http.Client{
+	c := http.Client{
 		Timeout: time.Second * 30, //设置超时时间
 	}
-	resp, err := client.Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		log.Println("发送请求失败:", err)
 		return
@@ -229,14 +255,23 @@ func (d *downEngine) getMetaData() {
 		return
 	}
 	//将元数据写入到文件中
-	err = os.WriteFile("./fileInfo/"+d.fileName+".god", meta.Message, 0666)
-	d.ipAdr = meta.IpAdr
-	d.unmarshalGod()
+	err = os.WriteFile("./fileInfo/"+engine.fileName+".god", meta.Message, 0666)
+
+	//获取拥有此文件的客户端ip列表
+	for _, ip := range meta.IpAdr {
+		client := client{
+			IPAdr:     ip,
+			fallTimes: 0,
+			isServer:  false,
+		}
+		engine.ipAdr = append(engine.ipAdr, &client)
+	}
+	engine.unmarshalGod()
 }
 
 // 解析元数据
-func (d *downEngine) unmarshalGod() {
-	file, err := os.Open("./fileInfo/" + d.fileName + ".god")
+func (engine *downEngine) unmarshalGod() {
+	file, err := os.Open("./fileInfo/" + engine.fileName + ".god")
 	if err != nil {
 		log.Println("打开元数据文件失败:", err)
 		return
@@ -248,20 +283,20 @@ func (d *downEngine) unmarshalGod() {
 		log.Println("解析元数据失败:", err)
 		return
 	}
-	d.fileInfo = meta
+	engine.fileInfo = meta
 }
 
 // 下载分片数据
-func (d *downEngine) downPiece(index int, client string) ([]byte, bool) {
+func (engine *downEngine) downPiece(index int, client string) ([]byte, bool, int) {
 	u := "http://" + client + "/down"
 	var data struct {
 		FileName string `json:"file_name"`
 	}
-	data.FileName = d.fileName
+	data.FileName = engine.fileName
 	encodeData, err := json.Marshal(data)
 	if err != nil {
 		log.Println("序列化文件名失败:", err)
-		return nil, false
+		return nil, false, clientErr
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -269,11 +304,11 @@ func (d *downEngine) downPiece(index int, client string) ([]byte, bool) {
 	req, err := http.NewRequestWithContext(ctx, "GET", u, bytes.NewBuffer(encodeData))
 	if err != nil {
 		log.Println("创建请求失败:", err)
-		return nil, false
+		return nil, false, clientErr
 	}
 
-	start := d.fileInfo.FilePieces[index].PieceStart
-	end := start + d.fileInfo.FilePieces[index].PieceSize
+	start := engine.fileInfo.FilePieces[index].PieceStart
+	end := start + engine.fileInfo.FilePieces[index].PieceSize
 	startStr := strconv.Itoa(start)
 	endStr := strconv.Itoa(end)
 
@@ -281,31 +316,34 @@ func (d *downEngine) downPiece(index int, client string) ([]byte, bool) {
 	req.Header.Set("Content-Length", strconv.Itoa(len(encodeData)))
 	req.Header.Set("User-Agent", "GDown")
 	req.Header.Set("Range", "bytes="+startStr+"-"+endStr)
-	req.Header.Set("Size", strconv.Itoa(d.fileInfo.FilePieces[index].PieceSize))
+	req.Header.Set("Size", strconv.Itoa(engine.fileInfo.FilePieces[index].PieceSize))
 
 	c := http.Client{}
 	resp, err := c.Do(req)
 	if err != nil {
 		log.Println("发送请求失败:", err)
-		return nil, false
+		return nil, false, fallErr
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Println("读取服务器回传信息失败:", err)
-		return nil, false
+		return nil, false, clientErr
 	}
 	if resp.StatusCode != http.StatusOK {
 		log.Println(resp.StatusCode, ":", string(body))
-		return nil, false
+		return nil, false, serverNormalErr
 	}
-	if hash(body) != d.fileInfo.FilePieces[index].PieceHash {
+	if hash(body) != engine.fileInfo.FilePieces[index].PieceHash {
 		log.Println("第" + strconv.Itoa(index) + "片校验失败")
-		return nil, false
+		return nil, false, fallErr
 	}
-	isDowningQueue[d.fileName].filePiece[start] = client //将分片加入到正在下载的队列中
-	return body, true
+
+	isDowningMu.Lock()
+	isDowningQueue[engine.fileName].filePiece[start] = client //将分片加入到正在下载的队列中
+	isDowningMu.Unlock()
+	return body, true, success
 }
 
 // 写入文件
